@@ -18,18 +18,18 @@ void chat(int/*, uint8_t**/);
 double reverse(double);
 bool check_order(double);
 
-struct request
+struct __attribute__((__packed__)) request
 {	
 	//4 bytes
 	uint8_t b0;
 	uint8_t b1;
 	uint8_t b2;
 	uint8_t b3;
-	//1 byte
-	int RQ_ID:4;
+	uint32_t RQ_ID;
 	//8 bytes
 	double value;
 	//19 bytes
+	//TODO: zmienny rozmiar
 	char tab[19];
 	
 };
@@ -96,13 +96,13 @@ int main()
 		close(client_sockfd);
 	}
 }
-
+/* https://linux.die.net/man/3/htobe64 */
 bool check_order(double a)
 {
 	if(__FLOAT_WORD_ORDER__ == __ORDER_BIG_ENDIAN__)
-		return false; //change to true at university
+		return true; 
 	else
-		return true; //change to false at university
+		return false; 
 }
 
 double reverse(double value)
@@ -124,7 +124,8 @@ double reverse(double value)
 
 void chat(int sockfd/*, uint8_t * id*/)
 {
-	
+	//htobe64(uint64_t) tylko trzeba zrobić unie, w unie odwrócić i zwrócić jako double
+	//be64toh(uint64_t)
 	struct request req;
 	bool client_online = true;
 	bool isBigEndian;
@@ -132,6 +133,7 @@ void chat(int sockfd/*, uint8_t * id*/)
 	while(client_online)
 	{
 		read(sockfd, &req, sizeof(struct request));
+		//TODO: sprawdzić czy wszystko przyszło
 		if(req.b3 == 1)
 		{	
 			//*id = *id + 1;
