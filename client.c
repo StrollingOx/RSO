@@ -75,20 +75,15 @@ int main()
         	printf("Connection with the server failed...\n"); 
         	exit(0); 
     	} 
-//////////////////////////////////////////////////////////////////////////////////////////////
-//TESTS	
-
-/*
-	double myDouble = 4.84;
-	uint64_t lol = double_to_uint64_t(myDouble);
-	lol = htobe64(lol);
-	lol = be64toh(lol);
-	myDouble = uint64_t_to_double(lol);
-	printf("myDouble: %f\n", myDouble);
-*/	
 
 //////////////////////////////////////////////////////////////////////////////////////////////
 //COMMUNICATION
+
+	//ignores signal SIGPIPE
+	//SIGPIPE is sent to a process if it tried to write to a socket that had been shutdown for writing or isn't connected [anymore].
+	signal(SIGPIPE, SIG_IGN);
+	
+	srand(time(NULL));
 	send_request_ROOT(sockfd, 4.84);
 	send_request_TIME(sockfd);
 	close(sockfd);
@@ -96,151 +91,69 @@ int main()
 
 void send_request_ROOT(int sockfd, double value)
 {
-	//buffer with all data (16 bytes)
-	//4+4 bytes of opcode and id
-	//8 bytes for the value
-	void *buffer;
+	uint32_t request_id = (int)rand()%999;
 
-	//data that will be sent
-	struct request ROOT_REQUEST = {htobe32(0x00000001), htobe32(125)};
+	struct request ROOT_REQUEST = {htobe32(0x00000001), htobe32(request_id)};
 	uint64_t VALUE = htobe64(double_to_uint64_t(value));
-	uint32_t REQUEST_SIZE = sizeof(ROOT_REQUEST) + sizeof(VALUE);
 
-	buffer = malloc(REQUEST_SIZE);
-	
-	memcpy(buffer				, &ROOT_REQUEST	, sizeof(ROOT_REQUEST));
-	memcpy(buffer + sizeof(ROOT_REQUEST)	, &VALUE	, sizeof(uint64_t));
-	
-	//send data
-	int result = writeWrapper(sockfd, buffer, REQUEST_SIZE);
-	if(result == -1)
-	{
-		printf("ERROR-CLIENT-SEND_REQUEST_ROOT-WRITEWRAPPER\n");
-		free(buffer);
-		exit(1);
-	} else if (result == REQUEST_SIZE) {
-		printf("Request was successfully sent(ROOT)!\n");
-	}
+	writeWrapper(sockfd, &ROOT_REQUEST, sizeof(ROOT_REQUEST));
+	writeWrapper(sockfd, &VALUE, sizeof(uint64_t));
 
-	free(buffer); buffer = malloc(sizeof(REQUEST_SIZE)); //calloc instead?
-
-	//answer from server
-	result = readWrapper(sockfd, buffer, REQUEST_SIZE);
-	if(result == -1)
-	{
-		printf("ERROR-CLIENT-SEND_REQUEST_ROOT-READWRAPPER\n");
-		free(buffer);
-		exit(1);
-	} else if (result == REQUEST_SIZE) {
-		printf("Answer received from server!\n");
-	}
+	readWrapper(sockfd, &ROOT_REQUEST, sizeof(ROOT_REQUEST));
+	readWrapper(sockfd, &VALUE, sizeof(uint64_t));
 	
-	memcpy(&ROOT_REQUEST, buffer, sizeof(ROOT_REQUEST));
 	ROOT_REQUEST.opc.uint32code = be32toh(ROOT_REQUEST.opc.uint32code);
 	ROOT_REQUEST.id = be32toh(ROOT_REQUEST.id);
+	VALUE = be64toh(VALUE);
+
+	if(ROOT_REQUEST.id != request_id) {printf("WRONG REQUEST ID (ROOT)\n"); exit(1);}
+	else{
 	switch(ROOT_REQUEST.opc.uint32code){
 
 		case 0x01000001:
-			memcpy(&VALUE, buffer + sizeof(ROOT_REQUEST), sizeof(uint64_t));
-			VALUE = be64toh(VALUE);
 			printf("Answer opcode: 0x%08x\n", ROOT_REQUEST.opc.uint32code);
 			printf("Answer ID: %d\n", ROOT_REQUEST.id);
 			printf("Received root: %.2f\n", uint64_t_to_double(VALUE));
 			
 			break;
 		default:
-			printf("Something went wrong :/ (ROOT_REQUEST, OPCODE FROM SERVER)\n");
-	}
-
-	free(buffer);
-	//close(sockfd);
+			printf("Something went wrong - ROOT_REQUEST, SWITCH(OPCODE) TRIGERRED DEFAULT\n");
+	}}
+	printf("Request complete.\n\n");
 }
 
 void send_request_TIME(int sockfd)
 {
-	void *buffer;
+	char *time;
+	uint32_t date_size;
+	uint32_t request_id = (int)rand()%999+1000;
 
-	//data that will be sent
-	struct request TIME_REQUEST = {htobe32(0x00000002), htobe32(744)};
+	struct request TIME_REQUEST = {htobe32(0x00000002), htobe32(request_id)};
 
-	buffer = malloc(sizeof(struct request));
-	
-	memcpy(buffer, &TIME_REQUEST, sizeof(TIME_REQUEST));
-	
-	//send data
-	int result = writeWrapper(sockfd, buffer, sizeof(TIME_REQUEST));
-	if(result == -1)
-	{
-		printf("ERROR-CLIENT-SEND_REQUEST_TIME-WRITEWRAPPER\n");
-		free(buffer);
-		exit(1);
-	} else if (result == sizeof(TIME_REQUEST)) {
-		printf("Request was successfully sent!(TIME)\n");
-	}
+	writeWrapper(sockfd, &TIME_REQUEST, sizeof(TIME_REQUEST));
+	readWrapper(sockfd, &TIME_REQUEST, sizeof(TIME_REQUEST));
 
-	free(buffer); buffer = malloc(sizeof(TIME_REQUEST) + sizeof(uint32_t)); //calloc instead?
-
-	//answer from server
-	result = readWrapper(sockfd, buffer, sizeof(TIME_REQUEST) + sizeof(uint32_t));
-	if(result == -1)
-	{
-		printf("ERROR-CLIENT-SEND_REQUEST_TIME-READWRAPPER\n");
-		free(buffer);
-		exit(1);
-	} else if (result == (sizeof(TIME_REQUEST) + sizeof(uint32_t))) {
-		printf("Answer received from server!\n");
-	}
-	
-	memcpy(&TIME_REQUEST, buffer, sizeof(TIME_REQUEST));
 	TIME_REQUEST.opc.uint32code = be32toh(TIME_REQUEST.opc.uint32code);
 	TIME_REQUEST.id = be32toh(TIME_REQUEST.id);
-	uint32_t date_size;
-	char *time;
-	memcpy(&date_size, buffer + sizeof(TIME_REQUEST), sizeof(uint32_t));
-	date_size = be32toh(date_size);	
-
-
+	
+	if(TIME_REQUEST.id != request_id) {printf("WRONG REQUEST ID (TIME)\n"); exit(1);}
 	switch(TIME_REQUEST.opc.uint32code){
-
 		case 0x01000002:
-			free(buffer); if(date_size<100) buffer=malloc(sizeof(char)*date_size);
-			readWrapper(sockfd, buffer, sizeof(char)*date_size);
-			time = (char *)malloc(sizeof(char)*date_size);
-			memcpy(time, (char *)buffer, sizeof(char)*date_size);
-			/* betoh time*/
+			readWrapper(sockfd, &date_size, sizeof(uint32_t));
+			date_size = be32toh(date_size);
+			time = (char *)malloc(sizeof(char)*date_size+1);
+			readWrapper(sockfd, time, sizeof(char)*date_size);
+
 			printf("Answer opcode: 0x%08x\n", TIME_REQUEST.opc.uint32code);
 			printf("Answer ID: %d\n", TIME_REQUEST.id);
 			printf("Date received: %s\n", time);
-			
+			free(time);	
 			break;
 		default:
-			printf("Something went wrong :/ (TIME_REQUEST, OPCODE FROM SERVER)\n");
+			printf("Something went wrong - TIME_REQUEST, SWITCH(OPCODE) TRIGERRED DEFAULT\n");
 	}
-
-	free(buffer);
-	//close(sockfd);
-
-
+	printf("Request complete.\n\n");
 }
-
-/*void notify_server(int sockfd, uint32_t request_size)
-{
-	void * buffer = malloc(sizeof(uint32_t));
-	uint32_t size = request_size;
-	memcpy(buffer, &size, sizeof(uint32_t));
-	printf("Sending notification to server: bytesToRead: %d\n", size);
-	int result = writeWrapper(sockfd, buffer, sizeof(uint32_t));
-	if(result == -1)
-	{
-		printf("ERROR-NOTIFY_SERVER\n");
-		free(buffer);
-		exit(1);
-	} else if (result == sizeof(uint32_t)) {
-		printf("Notification was successfully sent!\n");
-	}
-
-	free(buffer);
-}*/
 
 uint64_t double_to_uint64_t(double d) {
     union uint64_t_double ud;
@@ -256,57 +169,59 @@ double uint64_t_to_double(int64_t u) {
 
 ssize_t writeWrapper(int sockfd, void *buffer, size_t estimated_size)
 {
-	ssize_t BYTES_TO_WRITE = 0;
+	ssize_t total_bytes_write = 0;
 	
-	size_t BYTES_NOT_WRITTEN = estimated_size;
-	ssize_t BYTES_WRITTEN = 0;
-	char * REQUEST_BUFFER = (char *)buffer;
-	while(BYTES_NOT_WRITTEN > 0){
+	size_t amount_of_bytes_yet_to_write = estimated_size;
+	ssize_t bytes_written = 0;
+	char * request_buffer = (char *)buffer;
+	while(amount_of_bytes_yet_to_write > 0){
 
-		BYTES_WRITTEN = write(sockfd, REQUEST_BUFFER, BYTES_NOT_WRITTEN);
+		bytes_written = write(sockfd, request_buffer, amount_of_bytes_yet_to_write);
 
-		if(BYTES_WRITTEN > 0){
+		if(bytes_written > 0){
 
-			BYTES_TO_WRITE += BYTES_WRITTEN;	//how many bytes are already written
-			BYTES_NOT_WRITTEN -= BYTES_WRITTEN;	//how many bytes left to write
-			REQUEST_BUFFER += BYTES_WRITTEN;	//move pointer
-		} else if (BYTES_WRITTEN == -1) {
-			printf("ERROR while writing bytes! Im closing socket...\n");
+			total_bytes_write += bytes_written;		//how many bytes are already written
+			amount_of_bytes_yet_to_write -= bytes_written;	//how many bytes left to write
+			request_buffer += bytes_written;		//move pointer
+		} else if (bytes_written == -1 && errno == EINTR) {
+			perror(strerror(errno));
 			close(sockfd);
-			return -1;
-		} else if (BYTES_WRITTEN == 0 ) {
-			printf("Nothing to write (maybe buffer is empty?)\n");
-			return 0;
+			exit(1);
+		} else if (bytes_written == 0 ) {
+			close(sockfd);
+			exit(1);
 		}
 	}
-	return BYTES_TO_WRITE;
+	return total_bytes_write;
 }
 
 ssize_t readWrapper(int sockfd, void *buffer, size_t estimated_size)
 {
-	ssize_t BYTES_TO_READ = 0;
+	ssize_t total_bytes_read = 0;
 	
-	size_t BYTES_NOT_READ = estimated_size;
-	ssize_t BYTES_READ = 0;
-	char * REQUEST_BUFFER = (char *)buffer;
-	while(BYTES_NOT_READ > 0){
+	size_t amount_of_bytes_yet_to_read = estimated_size;
+	ssize_t bytes_read = 0;
+	char * request_buffer = (char *)buffer;
 
-		BYTES_READ = read(sockfd, REQUEST_BUFFER, BYTES_NOT_READ);
+	while(amount_of_bytes_yet_to_read > 0){
 
-		if(BYTES_READ> 0){
+		bytes_read = read(sockfd, request_buffer, amount_of_bytes_yet_to_read);
 
-			BYTES_TO_READ += BYTES_READ;	//how many bytes are already written
-			BYTES_NOT_READ -= BYTES_READ;	//how many bytes left to write
-			REQUEST_BUFFER += BYTES_READ;	//move pointer
-		} else if (BYTES_READ == -1) {
-			printf("ERROR while reading bytes! Im closing socket...\n");
+		if(bytes_read> 0){
+
+			total_bytes_read += bytes_read;			//how many bytes are already written
+			amount_of_bytes_yet_to_read -= bytes_read;	//how many bytes left to write
+			request_buffer += bytes_read;			//move pointer
+		} else if (bytes_read == -1 && errno == EINTR) {
+			perror(strerror(errno));
 			close(sockfd);
-			return -1;
-		} else if (BYTES_READ == 0 ) {
-			printf("Nothing to read (maybe buffer is empty?)\n");
-			return 0;
+			exit(1);
+		} else if (bytes_read == 0 ) {
+			printf("bytes_read == 0\n");
+			close(sockfd);
+			exit(1);
 		}
 	}
-	return BYTES_TO_READ;
+	return total_bytes_read;
 }
 

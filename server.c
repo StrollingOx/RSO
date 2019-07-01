@@ -103,7 +103,7 @@ int main()
 			printf("Server accept failed...\n");
 			exit(0);
 
-		} else { printf("Client accepted\n"); }
+		} else { printf("<-----------Client accepted----------->\n\n"); }
 //////////////////////////////////////////////////////////////////////////////////////////////
 //COMMUNICATION
 		/*if(fork() ==0)
@@ -111,7 +111,10 @@ int main()
 			handle_request(client_sockfd); 
 		}
 		*/
-		 
+		
+		//ignores signal SIGPIPE
+		//SIGPIPE is sent to a process if it tried to write to a socket that had been shutdown for writing or isn't connected [anymore].
+		signal(SIGPIPE, SIG_IGN);
 		handle_request(client_sockfd); 
 		handle_request(client_sockfd);  
 
@@ -121,79 +124,50 @@ int main()
 
 void handle_request(int sockfd)
 {
+	void *buffer;
 	uint64_t value;
 	char *current_time;
 	uint32_t date_sizeof;
 	uint32_t date_length;
+	struct request REQUEST;
+		
+	readWrapper(sockfd, &REQUEST, sizeof(struct request));
+	REQUEST.opc.uint32code = be32toh(REQUEST.opc.uint32code);
+	REQUEST.id = be32toh(REQUEST.id);
+	/*debug*/printf("Request received: OPCODE: 0x%08x; ID: %d\n", REQUEST.opc.uint32code, REQUEST.id);
+		
+	switch(REQUEST.opc.uint32code){
+		case 0x00000001:
+		//////////////////////////////////////////ROOT request
+			readWrapper(sockfd, &value, sizeof(uint64_t));
+			REQUEST.opc.uint32code = htobe32(0x01000001);
+			REQUEST.id = htobe32(REQUEST.id);
+			value = htobe64(double_to_uint64_t(sqrt(uint64_t_to_double(be64toh(value)))));
 
-	void *buffer = malloc(sizeof(struct request));
-	int bytes_received = readWrapper(sockfd, buffer, sizeof(struct request));
-	if(bytes_received == -1)
-	{
-		free(buffer);
-		printf("Could not receive the message\n");
-	} else if (bytes_received == sizeof(struct request)) {
-		struct request REQUEST;
-		memcpy(&REQUEST, buffer, sizeof(struct request));
-		REQUEST.opc.uint32code = be32toh(REQUEST.opc.uint32code);
-		REQUEST.id = be32toh(REQUEST.id);
-		printf("Request received: OPCODE: 0x%08x; ID: %d\n", REQUEST.opc.uint32code, REQUEST.id);
-		switch(REQUEST.opc.uint32code){
-			case 0x00000001:
-				//////////////////////////////////////////ROOT request
-				buffer = (uint64_t *)calloc(1, sizeof(uint64_t));
-				readWrapper(sockfd, buffer, sizeof(uint64_t));
-				memcpy(&value, buffer, sizeof(uint64_t));
-				free(buffer);
+			writeWrapper(sockfd, &REQUEST, sizeof(REQUEST));
+			writeWrapper(sockfd, &value, sizeof(uint64_t));
+		//////////////////////////////////////////////////////
+			break;
 				
-				REQUEST.opc.uint32code = htobe32(0x01000001);
-				REQUEST.id = htobe32(REQUEST.id);
-				value = htobe64(double_to_uint64_t(sqrt(uint64_t_to_double(be64toh(value)))));
+		case 0x00000002:
+		//////////////////////////////////////////TIME request
+			REQUEST.opc.uint32code = htobe32(0x01000002);
+			REQUEST.id = htobe32(REQUEST.id);
+			current_time = get_time();
+			date_length = strlen(current_time);
+			date_sizeof = htobe32(date_length);
 
-				buffer = malloc(sizeof(REQUEST) + sizeof(uint64_t));
-				memcpy(buffer			, &REQUEST	, sizeof(REQUEST));
-				memcpy(buffer + sizeof(REQUEST)	, &value	, sizeof(uint64_t));
-				if(writeWrapper(sockfd, buffer, sizeof(REQUEST) + sizeof(uint64_t)) <= 0)
-				{
-					printf("Error while answering request(root)\n");
-				}
-				//////////////////////////////////////////////////////
-				break;
+			writeWrapper(sockfd, &REQUEST, sizeof(REQUEST));
+			writeWrapper(sockfd, &date_sizeof, sizeof(uint32_t));
+			writeWrapper(sockfd, current_time, sizeof(char)*date_length);
+			/*--------*/
+		//////////////////////////////////////////////////////
+			break;
 				
-			case 0x00000002:
-				//////////////////////////////////////////TIME request
-				free(buffer);
-				
-				REQUEST.opc.uint32code = htobe32(0x01000002);
-				REQUEST.id = htobe32(REQUEST.id);
-				current_time = get_time();
-				date_length = strlen(current_time);
-				date_sizeof = date_length;
-				
-				//8 bytes for request structure, 4 bytes for respond length info, respond_size-bytes of response
-				buffer = malloc(sizeof(REQUEST) + sizeof(uint32_t) + (sizeof(char)*date_length));
-				//toBE
-				date_sizeof = htobe32(date_sizeof);
-				/*Convert time to BigEndian? Is it needed?*/
-
-				memcpy(buffer			, &REQUEST		, sizeof(REQUEST));
-				memcpy(buffer + sizeof(REQUEST)	, &date_sizeof	, sizeof(uint32_t));
-				memcpy(buffer + (sizeof(REQUEST) + sizeof(uint32_t)), current_time, (sizeof(char)*date_length));
-				
-				if(writeWrapper(sockfd, buffer, sizeof(REQUEST) + sizeof(uint32_t) + (sizeof(char)*date_length)) <= 0)
-				{
-					printf("Error while answering request(time)\n");
-				}
-				//////////////////////////////////////////////////////
-				break;
-				
-			default:
-				printf("ERROR-HANDLE_REQUEST-SWITCH-DEFAULT\n");
-				free(buffer);
-				exit(1);
+		default:
+			printf("ERROR-HANDLE_REQUEST-SWITCH-DEFAULT\n");
+			exit(1);
 		}
-	}
-	free(buffer);
 	printf("\n\n");
 }
 
@@ -220,56 +194,57 @@ double uint64_t_to_double(int64_t u) {
 
 ssize_t writeWrapper(int sockfd, void *buffer, size_t estimated_size)
 {
-	ssize_t BYTES_TO_WRITE = 0;
+	ssize_t total_bytes_write = 0;
 	
-	size_t BYTES_NOT_WRITTEN = estimated_size;
-	ssize_t BYTES_WRITTEN = 0;
-	char * REQUEST_BUFFER = (char *)buffer;
-	while(BYTES_NOT_WRITTEN > 0){
+	size_t amount_of_bytes_yet_to_write = estimated_size;
+	ssize_t bytes_written = 0;
+	char * request_buffer = (char *)buffer;
+	while(amount_of_bytes_yet_to_write > 0){
 
-		BYTES_WRITTEN = write(sockfd, REQUEST_BUFFER, BYTES_NOT_WRITTEN);
+		bytes_written = write(sockfd, request_buffer, amount_of_bytes_yet_to_write);
 
-		if(BYTES_WRITTEN > 0){
+		if(bytes_written > 0){
 
-			BYTES_TO_WRITE += BYTES_WRITTEN;	//how many bytes are already written
-			BYTES_NOT_WRITTEN -= BYTES_WRITTEN;	//how many bytes left to write
-			REQUEST_BUFFER += BYTES_WRITTEN;	//move pointer
-		} else if (BYTES_WRITTEN == -1) {
-			printf("ERROR while writing bytes! Im closing socket...\n");
+			total_bytes_write += bytes_written;		//how many bytes are already written
+			amount_of_bytes_yet_to_write -= bytes_written;	//how many bytes left to write
+			request_buffer += bytes_written;		//move pointer
+		} else if (bytes_written == -1 && errno == EINTR) {
+			perror(strerror(errno));
 			close(sockfd);
-			return -1;
-		} else if (BYTES_WRITTEN == 0 ) {
-			printf("Nothing to write (maybe buffer is empty?)\n");
-			return 0;
+			exit(1);
+		} else if (bytes_written == 0 ) {
+			close(sockfd);
+			exit(1);
 		}
 	}
-	return BYTES_TO_WRITE;
+	return total_bytes_write;
 }
 
 ssize_t readWrapper(int sockfd, void *buffer, size_t estimated_size)
 {
-	ssize_t BYTES_TO_READ = 0;
+	ssize_t total_bytes_read = 0;
 	
-	size_t BYTES_NOT_READ = estimated_size;
-	ssize_t BYTES_READ = 0;
-	char * REQUEST_BUFFER = (char *)buffer;
-	while(BYTES_NOT_READ > 0){
+	size_t amount_of_bytes_yet_to_read = estimated_size;
+	ssize_t bytes_read = 0;
+	char * request_buffer = (char *)buffer;
 
-		BYTES_READ = read(sockfd, REQUEST_BUFFER, BYTES_NOT_READ);
+	while(amount_of_bytes_yet_to_read > 0){
 
-		if(BYTES_READ> 0){
+		bytes_read = read(sockfd, request_buffer, amount_of_bytes_yet_to_read);
 
-			BYTES_TO_READ += BYTES_READ;	//how many bytes are already written
-			BYTES_NOT_READ -= BYTES_READ;	//how many bytes left to write
-			REQUEST_BUFFER += BYTES_READ;	//move pointer
-		} else if (BYTES_READ == -1) {
-			printf("ERROR while reading bytes! Im closing socket...\n");
+		if(bytes_read> 0){
+
+			total_bytes_read += bytes_read;			//how many bytes are already written
+			amount_of_bytes_yet_to_read -= bytes_read;	//how many bytes left to write
+			request_buffer += bytes_read;			//move pointer
+		} else if (bytes_read == -1 && errno == EINTR) {
+			perror(strerror(errno));
 			close(sockfd);
-			return -1;
-		} else if (BYTES_READ == 0 ) {
-			printf("Nothing to read (maybe buffer is empty?)\n");
-			return 0;
+			exit(1);
+		} else if (bytes_read == 0 ) {
+			close(sockfd);
+			exit(1);
 		}
 	}
-	return BYTES_TO_READ;
+	return total_bytes_read;
 }
